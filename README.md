@@ -7,14 +7,14 @@ Purpose:
 
 2. Testing out different algorithm that can maximized earnings.
 
-Disclaimer: This is not HFT. The frequency of the input data is per day. 
+**Disclaimer: This is not HFT. The frequency of the input data is per day.**
 
 ## TODO
-[] Agent
-[] Data Preprocessing
-[] Algorithm
-[] Scaling up (distributed)
-[] Frontend visualization (web based)
+- [ ] Agent
+- [ ] Data Preprocessing
+- [ ] Algorithm
+- [ ] Scaling up (distributed)
+- [ ] Frontend visualization (web based)
 
 ### Requirements
 
