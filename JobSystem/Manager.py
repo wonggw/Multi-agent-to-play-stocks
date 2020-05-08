@@ -1,4 +1,3 @@
-import copy
 import multiprocessing
 import gym
 import torch
@@ -17,18 +16,13 @@ def manager():
     ppo = PPO.PPO(stateDimension, actionDimension, hyperParameters)
     policyStateDict = multiprocessing.Manager().dict()
     policyStateDict = ppo.getPolicyStateDict()
-    
-    managerActions= multiprocessing.Manager().list()
-    managerStates= multiprocessing.Manager().list()
-    managerLogprobs= multiprocessing.Manager().list()
-    managerRewards= multiprocessing.Manager().list()
-    managerTerminalStatus= multiprocessing.Manager().list()
+    stateRepositoryQueue = multiprocessing.Manager().Queue() 
     stateRepository = utils.StateRepository()
-    
+
     updateNetworkWeightBarrier = multiprocessing.Barrier(hyperParameters.processNumber+1) 
     updateStateRespositoryEvent = multiprocessing.Event()
-    
-    processes=[multiprocessing.Process(target=Worker.worker , args=(hyperParameters,updateNetworkWeightBarrier,updateStateRespositoryEvent,managerActions,managerStates,managerLogprobs,managerRewards,managerTerminalStatus,policyStateDict)) for _ in range(hyperParameters.processNumber)]
+ 
+    processes=[multiprocessing.Process(target=Worker.worker , args=(hyperParameters,updateNetworkWeightBarrier,updateStateRespositoryEvent,stateRepositoryQueue ,policyStateDict)) for _ in range(hyperParameters.processNumber)]
     for process in processes:
         process.start()
 
@@ -39,26 +33,18 @@ def manager():
 
     while True:
 
+        stateRepository.clear()
         updateNetworkWeightBarrier.wait()
 
         learnStep+=1
         
-        stateRepository.actions =  list(copy.copy(managerActions))
-        stateRepository.states =  list(copy.copy(managerStates))
-        stateRepository.logprobs = list(copy.copy(managerLogprobs))
-        stateRepository.rewards =  list(copy.copy(managerRewards))
-        stateRepository.terminalStatus =  list(copy.copy(managerTerminalStatus))
+        for _ in range(hyperParameters.processNumber):
+            stateRepository.add(stateRepositoryQueue.get())
         
         ppo.update(stateRepository)
         
         policyStateDict = ppo.getPolicyStateDict()
         updateStateRespositoryEvent.set()
-        
-        del managerActions[:]
-        del managerStates[:]
-        del managerLogprobs[:]
-        del managerRewards[:]
-        del managerTerminalStatus[:]
         
         if (learnStep%hyperParameters.logInterval==0):
           print('Episode {} \t avg length: {} \t reward: {}'.format(learnStep, len(stateRepository.states)/hyperParameters.processNumber, sum(stateRepository.rewards)/hyperParameters.processNumber))

@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 class HyperParameters:
     def __init__(self):
@@ -11,15 +12,15 @@ class HyperParameters:
         self.logInterval = 1           # print avg reward in the interval
         
         self.maxEpisodes = 10000      # max training episodes
-        self.maxTimesteps = 1500       # max timesteps in one episode
-        self.updateTimestep = 500    # Update policy every n timesteps
+        self.maxTimesteps = 2000       # max timesteps in one episode
+        self.updateTimestep = 1000    # Update policy every n timesteps
         self.updateEpochs = 50               # Update policy for K epochs
         
         self.actionSTD = 0.5           # constant std for action distribution (Multivariate Normal)
         self.epsilonClip = 0.2              # clip parameter for PPO
         self.gamma = 0.99                # discount factor
         
-        self.lr = 0.05
+        self.lr = 0.03
         
         self.random_seed = None
   
@@ -30,14 +31,14 @@ class StateRepository:
         self.logprobs = []
         self.rewards = []
         self.terminalStatus = []
-    
+
     def add(self, newStateRepository):
         self.actions +=  newStateRepository.actions
         self.states +=  newStateRepository.states
         self.logprobs +=  newStateRepository.logprobs
         self.rewards +=  newStateRepository.rewards
         self.terminalStatus +=  newStateRepository.terminalStatus
-
+    
     def clear(self):
         del self.actions[:]
         del self.states[:]

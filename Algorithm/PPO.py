@@ -1,4 +1,4 @@
-import numpy as np
+import numpy
 import gym
 import torch
 import torch.nn as nn
@@ -32,19 +32,13 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
         
-    def selectAction(self, state, stateRepository):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-
-        actionMean = self.actorNet(state)
+    def selectAction(self, state):
+        actionMean = self.actorNet(torch.FloatTensor(state).to(self.device))
         actionVarianceMatrix = torch.diag(self.actionVariance).to(self.device)
         actionDistribution = MultivariateNormal(actionMean,actionVarianceMatrix)
         action = actionDistribution.sample()
-
-        stateRepository.states.append(state.detach().cpu())
-        stateRepository.actions.append(action.detach().cpu())
-        stateRepository.logprobs.append(actionDistribution.log_prob(action).detach().cpu())
         
-        return action.detach().cpu().data.numpy().flatten()
+        return action.detach().cpu().data.numpy() , actionDistribution.log_prob(action).detach().cpu().data.numpy()
     
     def evaluate(self, state, action):
         actionMean = self.actorNet(state)
@@ -72,10 +66,15 @@ class PPO:
         self.logProbsOld = 0      
  
         self.policy = ActorCritic(hyperParameters, stateDimension, actionDimension).to(hyperParameters.device)
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=0.0005 , betas=(0.9, 0.999))
-        # self.optimizer = torch.optim.SGD(self.policy.parameters(), lr=hyperParameters.lr, momentum=0.3,dampening=0.1, weight_decay=0.02)
+        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=0.0003 , betas=(0.9, 0.999))
+        # self.optimizer = torch.optim.SGD(self.policy.parameters(), lr=hyperParameters.lr, momentum=0.2,dampening=0.1, weight_decay=0.01)
         self.MseLoss = nn.MSELoss()
   
+    def convertListToTensor(self,list):
+        numpyArray = numpy.array(list)
+        arrayShape = numpyArray.shape 
+        return torch.from_numpy(numpyArray.reshape(-1)).reshape(arrayShape).float().to(self.device).detach()
+
     def update(self, stateRepository):   
         # Monte Carlo estimate of state rewards:
         rewards = []
@@ -90,10 +89,11 @@ class PPO:
         rewards = torch.tensor(rewards).float().to(self.device)
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
         
+        self.convertListToTensor(stateRepository.states)
         # convert list to tensor
-        statesOld = torch.squeeze(torch.stack(stateRepository.states).to(self.device), 1).detach()
-        actionsOld = torch.squeeze(torch.stack(stateRepository.actions).to(self.device), 1).detach()
-        logProbsOld = torch.squeeze(torch.stack(stateRepository.logprobs).to(self.device), 1).detach()
+        statesOld = self.convertListToTensor(stateRepository.states)
+        actionsOld = self.convertListToTensor(stateRepository.actions)
+        logProbsOld = self.convertListToTensor(stateRepository.logprobs)
         
         # Optimize policy for K epochs:
         for _ in range(self.updateEpochs):
