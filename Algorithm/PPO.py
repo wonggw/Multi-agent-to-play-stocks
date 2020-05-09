@@ -2,11 +2,60 @@ import numpy
 import gym
 import torch
 import torch.nn as nn
-from torch.distributions import MultivariateNormal
 
-class ActorCritic(nn.Module):
+class ActorCriticDiscrete(nn.Module):
     def __init__(self, hyperParameters,stateDimension, actionDimension):
-        super(ActorCritic, self).__init__()
+        super(ActorCriticDiscrete, self).__init__()
+        self.device = hyperParameters.device
+        # actor mean range -1 to 1
+        self.actorNet = nn.Sequential(
+                nn.Linear(stateDimension, 64),
+                nn.Tanh(),
+                nn.Linear(64, 64),
+                nn.Tanh(),
+                nn.Linear(64, actionDimension),
+                nn.Softmax(dim=-1)
+                ).to(self.device)
+        
+        # critic
+        self.criticNet = nn.Sequential(
+                nn.Linear(stateDimension, 64),
+                nn.Tanh(),
+                nn.Linear(64, 64),
+                nn.Tanh(),
+                nn.Linear(64, 1)
+                ).to(self.device) 
+  
+    def forward(self):
+        raise NotImplementedError
+        
+    def convertNumpyToTensorDict(self,numpyDict):
+        tensorDict={}
+        for key, value in numpyDict.items():
+            tensorDict[key] = torch.from_numpy(value).to(self.device)
+        return tensorDict
+
+    def selectAction(self, state):
+        state = torch.FloatTensor(state).to(self.device)
+        actionProbs = self.actorNet(state)
+        actionDistribution = torch.distributions.Categorical(actionProbs)
+        action = actionDistribution.sample()
+        
+        return action.detach().cpu().numpy(), actionDistribution.log_prob(action).detach().cpu().numpy()
+    
+    def evaluate(self, state, action):
+        actionProbs = self.actorNet(state)
+        actionDistribution = torch.distributions.Categorical(actionProbs)
+
+        action_logprobs = actionDistribution.log_prob(action)
+        entropyDistribution = actionDistribution.entropy()
+        stateValue = self.criticNet(state)
+        
+        return action_logprobs, torch.squeeze(stateValue), entropyDistribution
+  
+class ActorCriticContinuous(nn.Module):
+    def __init__(self, hyperParameters,stateDimension, actionDimension):
+        super(ActorCriticContinuous, self).__init__()
         self.device = hyperParameters.device
         # actor mean range -1 to 1
         self.actorNet = nn.Sequential(
@@ -32,19 +81,26 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
         
+    def convertNumpyToTensorDict(self,numpyDict):
+        tensorDict={}
+        for key, value in numpyDict.items():
+            tensorDict[key] = torch.from_numpy(value).to(self.device)
+        return tensorDict
+    
     def selectAction(self, state):
-        actionMean = self.actorNet(torch.FloatTensor(state).to(self.device))
+        state = torch.FloatTensor(state).to(self.device)
+        actionMean = self.actorNet(state)
         actionVarianceMatrix = torch.diag(self.actionVariance).to(self.device)
-        actionDistribution = MultivariateNormal(actionMean,actionVarianceMatrix)
+        actionDistribution = torch.distributions.MultivariateNormal(actionMean,actionVarianceMatrix)
         action = actionDistribution.sample()
         
-        return action.detach().cpu().data.numpy() , actionDistribution.log_prob(action).detach().cpu().data.numpy()
+        return action.detach().cpu().numpy(), actionDistribution.log_prob(action).detach().cpu().numpy()
     
     def evaluate(self, state, action):
         actionMean = self.actorNet(state)
         actionVariance = self.actionVariance.expand_as(actionMean)
         actionVarianceMatrix = torch.diag_embed(actionVariance).to(self.device)
-        actionDistribution = MultivariateNormal(actionMean, actionVarianceMatrix)
+        actionDistribution = torch.distributions.MultivariateNormal(actionMean, actionVarianceMatrix)
 
         action_logprobs = actionDistribution.log_prob(action)
         entropyDistribution = actionDistribution.entropy()
@@ -58,22 +114,21 @@ class PPO:
         self.lr = hyperParameters.lr
         self.gamma = hyperParameters.gamma
         self.epsilonClip = hyperParameters.epsilonClip
-        self.updateEpochs = hyperParameters.updateEpochs
-        
-        self.rewards=torch.tensor(0).float().to(self.device)
-        self.statesOld = 0
-        self.actionsOld = 0
-        self.logProbsOld = 0      
+        self.updateEpochs = hyperParameters.updateEpochs      
  
-        self.policy = ActorCritic(hyperParameters, stateDimension, actionDimension).to(hyperParameters.device)
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=0.0003 , betas=(0.9, 0.999))
+        if (hyperParameters.actionContinuous):
+            self.policy = ActorCriticContinuous(hyperParameters, stateDimension, actionDimension)
+        else:
+            self.policy = ActorCriticDiscrete(hyperParameters, stateDimension, actionDimension)
+            
+        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=hyperParameters.lr, betas=(0.9, 0.999))
         # self.optimizer = torch.optim.SGD(self.policy.parameters(), lr=hyperParameters.lr, momentum=0.2,dampening=0.1, weight_decay=0.01)
         self.MseLoss = nn.MSELoss()
   
     def convertListToTensor(self,list):
-        numpyArray = numpy.array(list)
+        numpyArray = numpy.stack(list)
         arrayShape = numpyArray.shape 
-        return torch.from_numpy(numpyArray.reshape(-1)).reshape(arrayShape).float().to(self.device).detach()
+        return torch.from_numpy(numpyArray.reshape(-1)).reshape(arrayShape).float().to(self.device)
 
     def update(self, stateRepository):   
         # Monte Carlo estimate of state rewards:
@@ -89,12 +144,12 @@ class PPO:
         rewards = torch.tensor(rewards).float().to(self.device)
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
         
-        self.convertListToTensor(stateRepository.states)
         # convert list to tensor
-        statesOld = self.convertListToTensor(stateRepository.states)
-        actionsOld = self.convertListToTensor(stateRepository.actions)
-        logProbsOld = self.convertListToTensor(stateRepository.logprobs)
-        
+        with torch.no_grad():
+            statesOld = self.convertListToTensor(stateRepository.states)
+            actionsOld = self.convertListToTensor(stateRepository.actions)
+            logProbsOld = self.convertListToTensor(stateRepository.logprobs)
+
         # Optimize policy for K epochs:
         for _ in range(self.updateEpochs):
             # Evaluating old actions and values :
@@ -115,98 +170,5 @@ class PPO:
             self.optimizer.step()
    
     def getPolicyStateDict(self):
-        return {key:value.to('cpu') for key, value in self.policy.state_dict().items()}
-
-
-def main():
-    ############## Hyperparameters ##############
-    env_name = "BipedalWalker-v3"
-    # render = True
-    render = False
-    solved_reward = 300         # stop training if avg_reward > solved_reward
-    log_interval = 10           # print avg reward in the interval
-    
-    max_episodes = 10000        # max training episodes
-    maxTimesteps = 1500        # max timesteps in one episode
-    updateTimestep = 1500     # Update policy every n timesteps
-    updateEpochs = 50               # Update policy for K epochs
-    
-    actionSTD = 0.5            # constant std for action distribution (Multivariate Normal)
-    epsilonClip = 0.2              # clip parameter for PPO
-    gamma = 0.99                # discount factor
-    
-    lr = 0.01
-    
-    random_seed = None
-    #############################################
-    
-    env = gym.make(env_name)
-    stateDimension = env.observation_space.shape[0]
-    actionDimension = env.action_space.shape[0]
-
-    if random_seed:
-        print("Random Seed: {}".format(random_seed))
-        torch.manual_seed(random_seed)
-        env.seed(random_seed)
-        np.random.seed(random_seed)
-    
-    stateRepository = StateRepository()
-    ppo = PPO(stateDimension, actionDimension, actionSTD, lr, gamma, updateEpochs, epsilonClip)
-    print(lr)
-    
-    # logging variables
-    running_reward = 0
-    avg_length = 0
-    timestep = 0
-    
-    # training loop
-    for i_episode in range(1, max_episodes+1):
-        state = env.reset()
-        for t in range(maxTimesteps):
-            timestep += 1
-            
-            # Running policy_old:
-            action = ppo.policyOld.selectAction(state, stateRepository)
-            state, reward, done,_ = env.step(action)
-            
-            # Saving reward and statusTerminals:
-            stateRepository.rewards.append(reward)
-            stateRepository.statusTerminals.append(done)
-            
-            running_reward += reward
-            
-            # update if its time
-            if timestep % updateTimestep == 0:
-                ppo.update(stateRepository)
-                stateRepository.clear()
-                timestep = 0
-            
-            if render:
-                env.render()
-            if done:
-                break
-                
-        avg_length += t
-        
-        # stop training if avg_reward > solved_reward
-        if running_reward > (log_interval*solved_reward):
-            print("########## Solved! ##########")
-            torch.save(ppo.policy.state_dict(), './PPO_continuous_{}.pth'.format(env_name))
-            break
-            
-        # save every 500 episodes
-        if i_episode % 500 == 0:
-            torch.save(ppo.policy.state_dict(), './PPO_continuous_{}.pth'.format(env_name))
-            
-        # logging
-        if i_episode % log_interval == 0:
-            avg_length = int(avg_length/log_interval)
-            running_reward = int((running_reward/log_interval))
-            
-            print('Episode {} \t avg length: {} \t reward: {}'.format(i_episode, avg_length, running_reward))
-            running_reward = 0
-            avg_length = 0
+        return {key:value.cpu().numpy() for key, value in self.policy.state_dict().items()}
   
-# if __name__ == '__main__':
-    # main()
-    

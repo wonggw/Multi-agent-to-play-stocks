@@ -14,21 +14,20 @@ def manager():
     env.close()
     
     ppo = PPO.PPO(stateDimension, actionDimension, hyperParameters)
-    policyStateDict = multiprocessing.Manager().dict()
-    policyStateDict = ppo.getPolicyStateDict()
-    stateRepositoryQueue = multiprocessing.Manager().Queue() 
+    stateRepositoryQueue = multiprocessing.Queue() 
     stateRepository = utils.StateRepository()
-
-    updateNetworkWeightBarrier = multiprocessing.Barrier(hyperParameters.processNumber+1) 
-    updateStateRespositoryEvent = multiprocessing.Event()
+    policyStateDictQueue = multiprocessing.Queue()
+    policyStateDict = ppo.getPolicyStateDict()
+    
+    updateNetworkWeightBarrier = multiprocessing.Barrier(hyperParameters.numberOfWorkers+1) 
  
-    processes=[multiprocessing.Process(target=Worker.worker , args=(hyperParameters,updateNetworkWeightBarrier,updateStateRespositoryEvent,stateRepositoryQueue ,policyStateDict)) for _ in range(hyperParameters.processNumber)]
+    processes=[multiprocessing.Process(target=Worker.worker , args=(hyperParameters,updateNetworkWeightBarrier,stateRepositoryQueue ,policyStateDict,policyStateDictQueue ,processID)) for processID in range(hyperParameters.numberOfWorkers)]
     for process in processes:
         process.start()
 
     # logging variables
-    running_reward = 0
-    avg_length = 0
+    # running_reward = 0
+    # avg_length = 0
     learnStep = 0
 
     while True:
@@ -38,19 +37,22 @@ def manager():
 
         learnStep+=1
         
-        for _ in range(hyperParameters.processNumber):
+        for _ in range(hyperParameters.numberOfWorkers):
             stateRepository.add(stateRepositoryQueue.get())
-        
         ppo.update(stateRepository)
         
         policyStateDict = ppo.getPolicyStateDict()
-        updateStateRespositoryEvent.set()
         
-        if (learnStep%hyperParameters.logInterval==0):
-          print('Episode {} \t avg length: {} \t reward: {}'.format(learnStep, len(stateRepository.states)/hyperParameters.processNumber, sum(stateRepository.rewards)/hyperParameters.processNumber))
+        for _ in range(hyperParameters.numberOfWorkers):
+            policyStateDictQueue.put(policyStateDict)
+            
+        
+        # if (learnStep%hyperParameters.logInterval==0):
+          # print('Episode {} \t avg length: {} \t reward: {}'.format(learnStep, len(stateRepository.states)/hyperParameters.numberOfWorkers, sum(stateRepository.rewards)/hyperParameters.numberOfWorkers))
         
        # save every 500 episodes
         if (learnStep % 100 == 0):
+            print("~~~~~~~~~~Saving Model~~~~~~~~~~")
             torch.save(ppo.policy.state_dict(), './PPO_multiagent_{}.pth'.format(hyperParameters.enviornmentName)) 
         
     for process in processes:
