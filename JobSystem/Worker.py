@@ -1,24 +1,59 @@
 import sys
-import multiprocessing
-import gym
-import torch
-import utils
 import numpy
-from Algorithm import PPO
- 
-def worker(hyperParameters,updateNetworkWeightBarrier,stateRepositoryQueue ,policyStateDict,policyStateDictQueue ,processID):
+import gym
 
-    env = gym.make(hyperParameters.enviornmentName)
-    stateDimension = env.observation_space.shape[0]
-    actionDimension = env.action_space.shape[0]
-    workerStateRepository = utils.StateRepository()
-    
-    if (hyperParameters.actionContinuous):
-        actorCritic = PPO.ActorCriticContinuous(hyperParameters, stateDimension, actionDimension)
+import utils
+ 
+def ActtionDiscreteToContinuous(actionDiscrete):
+    actionContinuous=numpy.zeros(4)
+    if (actionDiscrete==0):
+        return actionContinuous
     else:
-        actorCritic = PPO.ActorCriticDiscrete(hyperParameters, stateDimension, actionDimension)
-   
-    actorCritic.load_state_dict(actorCritic.convertNumpyToTensorDict(policyStateDict))   
+        index=((actionDiscrete-1)//2)
+        if (actionDiscrete%2==1):
+            value=-0.5
+        else:
+            value=0.5
+        actionContinuous[index]=value
+        return actionContinuous
+
+class EnviornmentSetup():
+    def __init__(self, hyperParameters,policyAlgorithm):
+        self.env = gym.make(hyperParameters.enviornmentName)
+        self.actionContinuous = hyperParameters.actionContinuous
+        self.stateRepository = utils.StateRepository()
+        self.policy = policyAlgorithm(hyperParameters)
+        
+        self.state = 0
+        self.action = 0
+        self.actionLogProb = 0
+        self.reward = 0
+        self.done = False
+
+    def selectAction(self,state):
+        self.state=state
+        self.action, self.actionLogProb = self.policy.selectAction(self.state)
+        return self.action
+  
+    def inputEnvStep(self,action):
+        if (self.actionContinuous):
+            stateNext, self.reward, self.done, info = self.env.step(action)
+        else:
+            stateNext, self.reward, self.done, info = self.env.step(action.item())
+        return stateNext, self.reward, self.done,info
+        
+    def loadToStateRepository(self):
+        self.stateRepository.states.append(numpy.array(self.state))
+        self.stateRepository.actions.append(self.action)
+        self.stateRepository.actionLogProbs.append(self.actionLogProb)
+        self.stateRepository.rewards.append(self.reward)
+        self.stateRepository.terminalStatus.append(self.done)
+ 
+    
+def worker(hyperParameters,policyAlgorithm,updateNetworkWeightBarrier,stateRepositoryQueue,actorCriticStateDictQueue,actorCriticStateDict,processID):
+        
+    enviornmentSetup=EnviornmentSetup(hyperParameters,policyAlgorithm)
+    enviornmentSetup.policy.stateDict = actorCriticStateDict
     
     # logging variables
     runningRewards = 0
@@ -26,39 +61,27 @@ def worker(hyperParameters,updateNetworkWeightBarrier,stateRepositoryQueue ,poli
     timeStep = 0
     
     for episode in range(1, hyperParameters.maxEpisodes+1):
-        state = env.reset()
+        state = enviornmentSetup.env.reset()
         for t in range(hyperParameters.maxTimesteps):
             try:
                 timeStep += 1
-                # Running policy_old:
-                action, logprob = actorCritic.selectAction(state)
-                workerStateRepository.states.append(numpy.array(state))
-                workerStateRepository.actions.append(action)
-                workerStateRepository.logprobs.append(logprob)
-                
-                if (hyperParameters.actionContinuous):
-                    state, reward, done,_ = env.step(action)
-                else:
-                    state, reward, done,_ = env.step(action.item())
 
-                # Saving reward and statusTerminals:
-                workerStateRepository.rewards.append(reward)
-                workerStateRepository.terminalStatus.append(done)
-                
+                action = enviornmentSetup.selectAction(state)
+                state, reward, done,_= enviornmentSetup.inputEnvStep(action)
+                enviornmentSetup.loadToStateRepository()
                 runningRewards += reward
+                
                 # update if its time
                 if timeStep % hyperParameters.updateTimestep == 0:
-                    stateRepositoryQueue.put(workerStateRepository)
+                    stateRepositoryQueue.put(enviornmentSetup.stateRepository)
                     updateNetworkWeightBarrier.wait()
-                    
-                    actorCriticStateDict=actorCritic.convertNumpyToTensorDict(policyStateDictQueue.get())
-                    actorCritic.load_state_dict(actorCriticStateDict)
-                    
-                    workerStateRepository.clear()
+  
+                    enviornmentSetup.policy.setStateDict(actorCriticStateDictQueue.get())
+                    enviornmentSetup.stateRepository.clear()
                     timeStep = 0
 
                 if hyperParameters.render:
-                    env.render()
+                    enviornmentSetup.env.render()
                     
                 # if processID==0 and episode% (hyperParameters.logInterval*5) == 0:  
                     # env.render()
@@ -67,7 +90,7 @@ def worker(hyperParameters,updateNetworkWeightBarrier,stateRepositoryQueue ,poli
                     break
                     
             except KeyboardInterrupt:
-                env.close()
+                enviornmentSetup.env.close()
                 sys.exit(0)        # logging
 
         averageSteps += t
@@ -80,4 +103,5 @@ def worker(hyperParameters,updateNetworkWeightBarrier,stateRepositoryQueue ,poli
             runningRewards = 0
             averageSteps = 0
     
-    env.close()
+    enviornmentSetup.env.close()
+    
