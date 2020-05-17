@@ -3,13 +3,20 @@ import gym
 import utils
 from Algorithm import PPO
 from JobSystem import Worker
+import DataReader
+import Enviornment
 
 def test():
     hyperParameters = utils.HyperParameters()
     directory='./TrainedModel/PPO_multiagent_{}.pth'.format(hyperParameters.enviornmentName)
     
-    env = gym.make(hyperParameters.enviornmentName)
-    hyperParameters.stateDimension = env.observation_space.shape[0]
+    # env = gym.make(hyperParameters.enviornmentName)
+    # hyperParameters.stateDimension = env.observation_space.shape[0]
+    # hyperParameters.actionDimension = env.action_space.shape[0]
+    
+    env = Enviornment.StockTradingEnvironment()
+    # hyperParameters.stateDimension = env.observation_space.shape
+    hyperParameters.stateDimension = (431)
     hyperParameters.actionDimension = env.action_space.shape[0]
     
     ppo = PPO.PPO(hyperParameters)

@@ -3,6 +3,7 @@ import numpy
 import gym
 
 import utils
+import Enviornment
  
 def ActtionDiscreteToContinuous(actionDiscrete):
     actionContinuous=numpy.zeros(4)
@@ -19,35 +20,34 @@ def ActtionDiscreteToContinuous(actionDiscrete):
 
 class EnviornmentSetup():
     def __init__(self, hyperParameters,policyAlgorithm):
-        self.env = gym.make(hyperParameters.enviornmentName)
+        # self.env = gym.make(hyperParameters.enviornmentName)
+        self.env = Enviornment.StockTradingEnvironment()
         self.actionContinuous = hyperParameters.actionContinuous
         self.stateRepository = utils.StateRepository()
         self.policy = policyAlgorithm(hyperParameters)
         
-        self.state = 0
-        self.action = 0
-        self.actionLogProb = 0
-        self.reward = 0
-        self.done = False
+        self.__state = 0
+        self.__action = 0
+        self.__actionLogProb = 0
+        self.__reward = 0
+        self.__done = False
 
     def selectAction(self,state):
-        self.state=state
-        self.action, self.actionLogProb = self.policy.selectAction(self.state)
-        return self.action
+        self.__state=state
+        self.__action, self.__actionLogProb = self.policy.selectAction(self.__state)
+        return self.__action
   
     def inputEnvStep(self,action):
-        if (self.actionContinuous):
-            stateNext, self.reward, self.done, info = self.env.step(action)
-        else:
-            stateNext, self.reward, self.done, info = self.env.step(action.item())
-        return stateNext, self.reward, self.done,info
+        action = action if self.actionContinuous else action.item()
+        stateNext, self.__reward, self.__done, info = self.env.step(action)
+        return stateNext, self.__reward, self.__done,info
         
     def loadToStateRepository(self):
-        self.stateRepository.states.append(numpy.array(self.state))
-        self.stateRepository.actions.append(self.action)
-        self.stateRepository.actionLogProbs.append(self.actionLogProb)
-        self.stateRepository.rewards.append(self.reward)
-        self.stateRepository.terminalStatus.append(self.done)
+        self.stateRepository.states.append(numpy.array(self.__state))
+        self.stateRepository.actions.append(self.__action)
+        self.stateRepository.actionLogProbs.append(self.__actionLogProb)
+        self.stateRepository.rewards.append(self.__reward)
+        self.stateRepository.terminalStatus.append(self.__done)
  
     
 def worker(hyperParameters,policyAlgorithm,updateNetworkWeightBarrier,stateRepositoryQueue,actorCriticStateDictQueue,actorCriticStateDict,processID):
@@ -62,6 +62,8 @@ def worker(hyperParameters,policyAlgorithm,updateNetworkWeightBarrier,stateRepos
     
     for episode in range(1, hyperParameters.maxEpisodes+1):
         state = enviornmentSetup.env.reset()
+        if processID==0:
+            print(enviornmentSetup.env.ticker)
         for t in range(hyperParameters.maxTimesteps):
             try:
                 timeStep += 1

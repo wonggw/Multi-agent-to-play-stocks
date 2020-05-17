@@ -5,11 +5,15 @@ import utils
 from Algorithm import PPO
 from JobSystem import Worker
 
+import Enviornment
+
 def manager():
 
     hyperParameters = utils.HyperParameters()
-    env = gym.make(hyperParameters.enviornmentName)
-    hyperParameters.stateDimension = env.observation_space.shape[0]
+    # env = gym.make(hyperParameters.enviornmentName)
+    env = Enviornment.StockTradingEnvironment()
+    # hyperParameters.stateDimension = env.observation_space.shape
+    hyperParameters.stateDimension = (431)
     hyperParameters.actionDimension = env.action_space.shape[0]
     env.close()
     
